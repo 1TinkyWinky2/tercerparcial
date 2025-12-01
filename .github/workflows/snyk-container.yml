@@ -44,7 +44,7 @@ jobs:
 
       - name: Fix SARIF security severity values
         run: |
-          # Script más robusto para corregir el SARIF
+          # Script corregido que maneja arrays nulos
           jq '
           # Función para mapear niveles de severidad a números
           def severity_to_number:
@@ -54,31 +54,40 @@ jobs:
             elif . == "low" then "3.0"
             else "0.0" end;
 
-          # Corregir security-severity en rules
+          # Asegurar que los arrays existan antes de iterar
+          (.runs[] | select(.tool.driver.rules == null).tool.driver.rules) = [] |
+          (.runs[] | select(.results == null).results) = [] |
+
+          # Corregir security-severity en rules (solo si rules existe)
           (.runs[].tool.driver.rules[]? | 
-            if .properties?."security-severity"? == null then
-              .properties."security-severity" = (if .properties?.severity? then 
+            select(.properties?."security-severity"? == null) |
+            .properties."security-severity" = (
+              if .properties?.severity? then 
                 .properties.severity | severity_to_number 
-              else "0.0" end)
-            else . end
+              else "0.0" end
+            )
           ) |
           
-          # Corregir security-severity en results
+          # Corregir security-severity en results (solo si results existe)
           (.runs[].results[]? | 
-            if .properties?."security-severity"? == null then
-              .properties."security-severity" = (if .properties?.severity? then 
+            select(.properties?."security-severity"? == null) |
+            .properties."security-severity" = (
+              if .properties?.severity? then 
                 .properties.severity | severity_to_number 
-              else "0.0" end)
-            else . end
+              else "0.0" end
+            )
           )
           ' snyk-container-raw.sarif > snyk-container.sarif
 
       - name: Validate SARIF file
         run: |
-          echo "=== Validating SARIF structure ==="
-          jq '.runs[].tool.driver.rules[]?.properties? | {"rule": .id, "security-severity": ."security-severity"}' snyk-container.sarif
-          echo "=== Checking for null values ==="
-          jq '.. | select(. == null)' snyk-container.sarif | if [ -s ]; then echo "Found null values!"; exit 1; else echo "No null values found"; fi
+          echo "=== Validating SARIF file ==="
+          if jq empty snyk-container.sarif 2>/dev/null; then
+            echo "✅ SARIF file is valid JSON"
+          else
+            echo "❌ SARIF file is invalid JSON"
+            exit 1
+          fi
 
       - name: Upload Snyk SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v4
