@@ -44,13 +44,43 @@ jobs:
 
       - name: Fix SARIF security severity values
         run: |
-          # Corregir valores null en security-severity
+          # Script más robusto para corregir el SARIF
           jq '
-            (.runs[].results[] | select(.properties?.security_severity? == null).properties.security_severity) = "0.0" |
-            (.runs[].tool.driver.rules[] | select(.properties?.security_severity? == null).properties.security_severity) = "0.0"
+          # Función para mapear niveles de severidad a números
+          def severity_to_number:
+            if . == "critical" then "9.5"
+            elif . == "high" then "7.5"
+            elif . == "medium" then "5.0"
+            elif . == "low" then "3.0"
+            else "0.0" end;
+
+          # Corregir security-severity en rules
+          (.runs[].tool.driver.rules[]? | 
+            if .properties?."security-severity"? == null then
+              .properties."security-severity" = (if .properties?.severity? then 
+                .properties.severity | severity_to_number 
+              else "0.0" end)
+            else . end
+          ) |
+          
+          # Corregir security-severity en results
+          (.runs[].results[]? | 
+            if .properties?."security-severity"? == null then
+              .properties."security-severity" = (if .properties?.severity? then 
+                .properties.severity | severity_to_number 
+              else "0.0" end)
+            else . end
+          )
           ' snyk-container-raw.sarif > snyk-container.sarif
 
+      - name: Validate SARIF file
+        run: |
+          echo "=== Validating SARIF structure ==="
+          jq '.runs[].tool.driver.rules[]?.properties? | {"rule": .id, "security-severity": ."security-severity"}' snyk-container.sarif
+          echo "=== Checking for null values ==="
+          jq '.. | select(. == null)' snyk-container.sarif | if [ -s ]; then echo "Found null values!"; exit 1; else echo "No null values found"; fi
+
       - name: Upload Snyk SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: snyk-container.sarif
