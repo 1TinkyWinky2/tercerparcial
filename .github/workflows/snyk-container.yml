@@ -23,8 +23,10 @@ jobs:
       - name: Build Docker image
         run: docker build -t my-node-app:latest .
 
-      - name: Install Snyk CLI
-        run: npm install -g snyk
+      - name: Install Snyk CLI and jq
+        run: |
+          npm install -g snyk
+          sudo apt-get update && sudo apt-get install -y jq
 
       - name: Authenticate Snyk
         run: snyk config set api=$SNYK_TOKEN
@@ -36,22 +38,17 @@ jobs:
         run: |
           snyk container test my-node-app:latest \
             --file=Dockerfile \
-            --sarif --sarif-file-output=snyk-container.sarif
+            --sarif --sarif-file-output=snyk-container-raw.sarif
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-      - name: List workspace files (debug)
+      - name: Fix SARIF security severity values
         run: |
-          echo "=== WORKSPACE FILES ==="
-          ls -R .
-
-      # 🔥 Solución al warning url.parse()
-      # Si tu aplicación se ejecuta durante el análisis, esto lo eliminará
-      - name: Run Node app without deprecation warnings
-        run: |
-          if [ -f "server.js" ]; then
-            node --no-deprecation server.js &
-          fi
+          # Corregir valores null en security-severity
+          jq '
+            (.runs[].results[] | select(.properties?.security_severity? == null).properties.security_severity) = "0.0" |
+            (.runs[].tool.driver.rules[] | select(.properties?.security_severity? == null).properties.security_severity) = "0.0"
+          ' snyk-container-raw.sarif > snyk-container.sarif
 
       - name: Upload Snyk SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
